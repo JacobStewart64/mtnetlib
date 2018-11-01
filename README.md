@@ -1,11 +1,3 @@
-I want to implement some sort of flexible bitpacking
+I can see this codebase going places.
 
-ssl
-
-compression
-
-everything multi-threaded.
-
-eventually port to windows
-
-To-Do: See what other code I can scavenge from my other projects.
+I'll leave this here, hope it helps somebody, but I must make this library private and try to sell it lol.

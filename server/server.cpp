@@ -23,11 +23,13 @@ public:
   void set_num_accept_workers(long);
   void set_num_msg_handle_workers(long);
   void set_epoll_wait_timeout(long);
+  void set_backlog(long);
   lpfn get_accept_handler();
   lpfn get_message_handler();
   long get_num_accept_workers();
   long get_num_msg_handle_workers();
   long get_epoll_wait_timeout();
+  long get_backlog();
   bool good();
 
 private:
@@ -36,6 +38,7 @@ private:
   long num_accept_workers_;
   long num_msg_handle_workers_;
   long epoll_wait_timeout_;
+  long backlog_;
   lpfn accept_handler_;
   lpfn message_handler_;
   
@@ -50,6 +53,7 @@ void ServerConfig::autoconfig()
   num_accept_workers_ = 1;
   num_msg_handle_workers_ = num_cores() * 2;
   epoll_wait_timeout_ = 250;
+  backlog_ = 10000;
 }
 
 void ServerConfig::set_accept_handler(void(*handler)(char*, int))
@@ -77,6 +81,11 @@ void ServerConfig::set_epoll_wait_timeout(long us)
   epoll_wait_timeout_ = us;
 }
 
+void ServerConfig::set_backlog(long backlog)
+{
+  backlog_ = backlog;
+}
+
 lpfn ServerConfig::get_accept_handler()
 {
   return accept_handler_;
@@ -102,10 +111,16 @@ long ServerConfig::get_epoll_wait_timeout()
   return epoll_wait_timeout_;
 }
 
+long ServerConfig::get_backlog()
+{
+  return backlog_;
+}
+
 //assert data is good to use
 //compiles out in release?
 bool ServerConfig::good()
 {
+  assert(backlog_ >= 0);
   assert(num_accept_workers_ > 0);
   assert(num_msg_handle_workers_ > 0);
   assert(epoll_wait_timeout_ >= 0);
@@ -119,6 +134,7 @@ long ServerConfig::num_cores()
   return nprocs;
 }
 
+
 class Server {
 
 public:
@@ -127,7 +143,6 @@ public:
   bool listen(const char* host, int port, int socket_flags = 0);
   bool is_running() const;
   void stop();
-  void set_message_handler(void(*handler)(char*, int));
   void reconfigure(ServerConfig&&);
 
 private:
@@ -135,7 +150,9 @@ private:
   int create_socket(const char* host, int port, Fn fn, int socket_flags = 0);
   int create_server_socket(const char* host, int port, int socket_flags);
   int bind_internal(const char* host, int port, int socket_flags);
+  template<long _fixed_buffer_size = 1024>
   void accept_worker();
+  template<long _fixed_buffer_size = 1024>
   void message_worker();
   void launch_threads();
   void join_threads();
@@ -291,9 +308,10 @@ int Server::bind_internal(const char* host, int port, int socket_flags)
     }
 }
 
+template<const long _fixed_buffer_size>
 void Server::accept_worker()
 {
-  char buffer[1024];
+  char buffer[_fixed_buffer_size];
 
   while (!shutdown_threads_)
   {
@@ -315,10 +333,11 @@ void Server::accept_worker()
   }
 }
 
+template<const long _fixed_buffer_size>
 void Server::message_worker()
 {
   epoll_event event;
-  char buffer[1024];
+  char buffer[_fixed_buffer_size];
   int written_index = 0;
   int read_index = 0;
   long packet_len;
@@ -326,9 +345,13 @@ void Server::message_worker()
 
   while (!shutdown_threads_)
   {
-    //wait for fd to be readable
+    //mock - does not work - will maintain global
+    //map of pair<'packet', worker-switch-flag> (static buffer with nice interface,
+    //worker-switch-flag for identifying if need more read)
+    //to fd. fd : pair<'packet', worker-switch-flag>
     if (!again)
     {
+      //wait for fd to be readable
       int num_events = epoll_wait(epoll_fd_,
         &event,
         1,
@@ -337,7 +360,7 @@ void Server::message_worker()
       if (num_events > 0)
       {
         //did we read it all?
-        int num_read = recv(event.data.fd, buffer, 1024, 0); //data cannot be longer than 1024
+        int num_read = recv(event.data.fd, buffer, _fixed_buffer_size, 0); //data cannot be longer than 1024
         
         //first 8 bytes of any buffer are packet length
         packet_len = (long)*buffer;
@@ -351,6 +374,34 @@ void Server::message_worker()
         //and there is none left. You can work on your data
         //in a stream way and only consume what is needed
         //to get a head start and not wait for all data to arrive
+        /*
+            Here is a typical example: thread 1 is waiting for a condition, which may be fulfilled by thread 2.
+
+            We use one mutex and one condition.
+
+            pthread_mutex_t mutex;
+            pthread_cond_t condition;
+
+            thread 1 :
+
+            pthread_mutex_lock(&mutex); //mutex lock
+            while(!condition){
+                pthread_cond_wait(&condition, &mutex); //wait for the condition
+            }
+
+            /* do what you want */
+
+            /*pthread_mutex_unlock(&mutex);
+
+            thread 2:
+
+            pthread_mutex_lock(&mutex);
+
+            /* do something that may fulfill the condition */
+
+            //pthread_mutex_unlock(&mutex);
+            //pthread_cond_signal(&condition); //wake up thread 1
+
         if (num_read != -1)
         {
           config_.get_message_handler()(buffer, event.data.fd);
@@ -403,7 +454,7 @@ void Server::listen_internal()
     shutdown_threads_ = false;
     
     ::listen(svr_sock_,
-        10000);
+        config_.get_backlog());
 
     launch_threads();
 }
@@ -433,7 +484,7 @@ int main()
   server.listen("localhost", 1234);
 
   usleep(1000000);
-  
+
   server.stop();
   
   return 0;

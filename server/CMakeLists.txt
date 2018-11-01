@@ -3,8 +3,6 @@ cmake_minimum_required (VERSION 3.4)
 # The project
 project (server)
 
-set(CMAKE_BUILD_TYPE RelWithDebInfo)
-
 # The version number.
 set (server_VERSION_MAJOR 1)
 set (server_VERSION_MINOR 0)
@@ -26,8 +24,11 @@ include_directories(../include)
 # Libs
 set(LIBRARY_FILES OpenSSL::Crypto OpenSSL::SSL Threads::Threads)
 
-# Compile the target
+# set the target
 add_executable (${PROJECT_NAME} ${SOURCE_FILES})
+set_target_properties(${PROJECT_NAME}
+  PROPERTIES CXX_STANDARD 17
+  CXX_EXTENSIONS OFF)
 
 # Link the libs
 target_link_libraries(${PROJECT_NAME} ${LIBRARY_FILES})

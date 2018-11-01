@@ -10,45 +10,95 @@
 #include <unistd.h>
 #include <functional>
 #include <memory.h>
-#include <fstream>
+
+struct ServerConfig {
+
+  void autoconfig();
+  void set_accept_handler(void(*)(char*, int));
+  void set_message_handler(void(*)(char*, int));
+
+  long num_accept_workers_;
+  long num_msg_handle_workers_;
+  long epoll_wait_timeout_;
+  void(*accept_handler_)(char*, int);
+  void(*message_handler_)(char*, int);
+
+private:
+
+  long num_cores();
+  
+};
+
+
+void ServerConfig::autoconfig()
+{
+  num_accept_workers_ = 1;
+  num_msg_handle_workers_ = num_cores() * 2;
+  epoll_wait_timeout_ = 250;
+}
+
+void ServerConfig::set_accept_handler(void(*handler)(char*, int))
+{
+  accept_handler_ = handler;
+}
+
+void ServerConfig::set_message_handler(void(*handler)(char*, int))
+{
+  message_handler_ = handler;
+}
+
+long ServerConfig::num_cores()
+{
+  long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+  return nprocs;
+}
 
 class Server {
 
 public:
-  Server();
+  Server(ServerConfig&& config);
+  ~Server();
   bool listen(const char* host, int port, int socket_flags = 0);
   bool is_running() const;
   void stop();
   void set_message_handler(void(*handler)(char*, int));
+  void reconfigure(ServerConfig&&);
 
 private:
   template<typename Fn>
   int create_socket(const char* host, int port, Fn fn, int socket_flags = 0);
   int create_server_socket(const char* host, int port, int socket_flags);
   int bind_internal(const char* host, int port, int socket_flags);
-  void worker();
-  long num_cores();
+  void accept_worker();
+  void message_worker();
   bool listen_internal();
 
-  void(*message_handler_)(char*, int);
-  std::thread* thread_pool_;
+  std::thread* accept_worker_pool_;
+  std::thread* msg_handle_worker_pool_;
+  ServerConfig config_;
   int svr_sock_;
   int epoll_fd_;
-  int n_cores_;
   bool is_running_;
   bool shutdown_threads_;
-
 };
 
-Server::Server()
-  : message_handler_(nullptr)
-  ,thread_pool_(nullptr)
+Server::Server(ServerConfig&& config)
+  : accept_worker_pool_(nullptr)
+  , msg_handle_worker_pool_(nullptr)
+  , config_(std::move(config))
   , svr_sock_(-1)
   , epoll_fd_(-1)
-  , n_cores_(-1)
   , is_running_(false)
   , shutdown_threads_(false)
 {
+  accept_worker_pool_ = new std::thread[config.num_accept_workers_];
+  msg_handle_worker_pool_ = new std::thread[config.num_msg_handle_workers_];
+}
+
+Server::~Server()
+{
+  delete[] accept_worker_pool_;
+  delete[] msg_handle_worker_pool_;
 }
 
 bool Server::listen(const char* host, int port, int socket_flags)
@@ -76,9 +126,9 @@ void Server::stop()
     }
 }
 
-void Server::set_message_handler(void(*handler)(char*, int))
+void Server::reconfigure(ServerConfig&& config)
 {
-  message_handler_ = handler;
+  config = config;
 }
 
 template<typename Fn>
@@ -163,68 +213,79 @@ int Server::bind_internal(const char* host, int port, int socket_flags)
     }
 }
 
-void Server::worker()
+void Server::accept_worker()
 {
-  epoll_event event;
   char buffer[1024];
 
-  while (true)
+  while (!shutdown_threads_)
   {
-    //wait for fd to be readable
-    int num_events = epoll_wait(epoll_fd_,
-      &event,
-      1,
-      250);
+    int new_connect_fd = accept(svr_sock_,
+      0, //&addr_in
+      0);//&addrlen
 
-    if (shutdown_threads_)
-    {
-      return;
-    }
+    epoll_event event;
+    event.events = EPOLLIN | EPOLLONESHOT;
+    event.data.fd = new_connect_fd;
 
-    if (num_events > 0)
-    {
-      if (event.data.fd == svr_sock_)
-      {
-        int new_connect_fd = accept(svr_sock_,
-          0, //&addr_in
-          0);//&addrlen
+    epoll_ctl(epoll_fd_,
+      EPOLL_CTL_ADD,
+      new_connect_fd,
+      &event);
 
-        epoll_event event;
-        event.events = EPOLLIN | EPOLLONESHOT;
-        event.data.fd = new_connect_fd;
-
-        epoll_ctl(epoll_fd_,
-          EPOLL_CTL_ADD,
-          new_connect_fd,
-          &event);
-
-        epoll_event new_event;
-        new_event.events = EPOLLIN | EPOLLONESHOT;
-        new_event.data.fd = svr_sock_;
-
-        epoll_ctl(epoll_fd_,
-          EPOLL_CTL_MOD,
-          svr_sock_,
-          &new_event);
-      }
-      else
-      { 
-        int num_read = recv(event.data.fd, buffer, 1024, 0); //data cannot be longer than 1024
-        if (num_read != -1)
-        {
-          message_handler_(buffer, event.data.fd);
-        }
-      }
-    }
+    //let them have an event on connect
+    config_.accept_handler_(buffer, new_connect_fd);  
   }
 }
 
-long Server::num_cores()
+void Server::message_worker()
 {
+  epoll_event event;
+  char buffer[1024];
+  int written_index = 0;
+  int read_index = 0;
+  long packet_len;
+  bool again = false;
 
-  long nprocs = -1;
-  nprocs = sysconf(_SC_NPROCESSORS_ONLN);
-  return nprocs;
+  while (!shutdown_threads_)
+  {
+    //wait for fd to be readable
+    if (!again)
+    {
+      int num_events = epoll_wait(epoll_fd_,
+        &event,
+        1,
+        250);
+
+      if (num_events > 0)
+      {
+        //did we read it all?
+        int num_read = recv(event.data.fd, buffer, 1024, 0); //data cannot be longer than 1024
+        
+        //first 8 bytes of any buffer are packet length
+        packet_len = (long)*buffer;
+        if (num_read < packet_len && num_read != -1)
+        {
+          again = true; //read again on this fd into this packet
+        }
+        
+        //pass a partial or a complete packet to message_handler_
+        //partial packets will block when their data is consumed
+        //and there is none left. You can work on your data
+        //in a stream way and only consume what is needed
+        //to get a head start and not wait for all data to arrive
+        if (num_read != -1)
+        {
+          
+          config_.message_handler_(buffer, event.data.fd);
+        }
+      }
+    }
+    else
+    {
+      again = false;
+      //add to packet
+    }
+  }
 }
 
 bool Server::listen_internal()
@@ -234,42 +295,35 @@ bool Server::listen_internal()
     is_running_ = true;
     shutdown_threads_ = false;
 
-    //get number of cores * 2
-    n_cores_ = num_cores() * 2;
-
     //create epoll system object
     epoll_fd_ = epoll_create1(0);
     
-    //set listen_socket to look for
-    //opportunity to accept
-    epoll_event event;
-    event.events = EPOLLIN | EPOLLONESHOT;
-    event.data.fd = svr_sock_;
-
-    epoll_ctl(epoll_fd_,
-      EPOLL_CTL_ADD,
-      svr_sock_,
-      &event);
-    
-
     ::listen(svr_sock_,
         10000);
 
-    thread_pool_ = new std::thread[n_cores_];
-
     //kickoff threads
-    for (int i = 0; i < n_cores_; ++i)
+    for (int i = 0; i < config_.num_accept_workers_; ++i)
     {
-        thread_pool_[i] = std::thread(std::bind(&Server::worker, this));
+      accept_worker_pool_[i] = std::thread(std::bind(&Server::accept_worker, this));
     }
 
-    //wait for threads to be signalled to exit
-    for (int i = 0; i < n_cores_; ++i)
+    for (int i = 0; i < config_.num_msg_handle_workers_; ++i)
     {
-        thread_pool_[i].join();
+      msg_handle_worker_pool_[i] = std::thread(std::bind(&Server::message_worker, this));
     }
 
-    delete[] thread_pool_;
+
+
+    //wait for stop to be called
+    for (int i = 0; i < config_.num_accept_workers_; ++i)
+    {
+        accept_worker_pool_[i].join();
+    }
+
+    for (int i = 0; i < config_.num_msg_handle_workers_; ++i)
+    {
+        msg_handle_worker_pool_[i].join();
+    }
 
     //close epoll
     close(epoll_fd_);
@@ -280,53 +334,22 @@ bool Server::listen_internal()
     return ret;
 }
 
+void accept_handler(char* msg, int fd)
+{
+  //need to handle accept event?
+}
 
 void message_handler(char* msg, int fd)
 {
-  char account_name[16];
-  char account_password[16];
-
-  int i = 0;
-  for (;msg[i] != ':'; ++i)
-    account_name[i] = msg[i];
-  account_name[i] = '\0';
-
-  ++i;
-  int offset = i;
-  for (;msg[i] != ':'; ++i)
-    account_password[i - offset] = msg[i];
-  account_password[i - offset] = '\0';
-
-  //open the account file
-  char filepath[256];
-  sprintf(filepath, "../../accountdb/%s", account_name);
-  std::ifstream account_file(filepath);
-  
-  char actual_password[16];
-  memset(actual_password, 0, 16);
-  if (!account_file.fail())
-  {
-    account_file >> actual_password;
-  }
-
-  if (strcmp(account_password, actual_password) == 0)
-  {
-    msg = "!";
-    send(fd, msg, 1, 0);
-  }
-  else
-  {
-    msg = "?";
-    send(fd, msg, 1, 0);
-  }
-
-  close(fd);
+  //need to handle recv?
 }
 
 int main()
 {
-  Server server;
-  server.set_message_handler(message_handler);
+  ServerConfig config;
+  config.autoconfig();
+  config.set_message_handler(message_handler);
+  Server server(std::move(config));
 
   server.listen("localhost", 1234);
   

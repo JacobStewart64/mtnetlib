@@ -137,7 +137,9 @@ private:
   int bind_internal(const char* host, int port, int socket_flags);
   void accept_worker();
   void message_worker();
-  bool listen_internal();
+  void launch_threads();
+  void join_threads();
+  void listen_internal();
 
   std::thread* accept_worker_pool_;
   std::thread* msg_handle_worker_pool_;
@@ -153,26 +155,24 @@ Server::Server(ServerConfig&& config)
   , msg_handle_worker_pool_(nullptr)
   , config_(std::move(config))
   , svr_sock_(-1)
-  , epoll_fd_(-1)
+  , epoll_fd_(epoll_create1(0))
   , is_running_(false)
   , shutdown_threads_(false)
 {
   config_.good();
-  accept_worker_pool_ = new std::thread[config_.get_num_accept_workers()];
-  msg_handle_worker_pool_ = new std::thread[config_.get_num_msg_handle_workers()];
 }
 
 Server::~Server()
 {
-  delete[] accept_worker_pool_;
-  delete[] msg_handle_worker_pool_;
+
 }
 
 bool Server::listen(const char* host, int port, int socket_flags)
 {
     if (bind_internal(host, port, socket_flags) < 0)
         return false;
-    return listen_internal();
+    listen_internal();
+    return true;
 }
 
 bool Server::is_running() const
@@ -183,13 +183,24 @@ bool Server::is_running() const
 void Server::stop()
 {
     if (is_running_) {
-        shutdown_threads_ = true;
+      assert(svr_sock_ != -1);
+      
+      //we are not running at all now
+      is_running_ = false;
 
-        assert(svr_sock_ != -1);
-        auto sock = svr_sock_;
-        svr_sock_ = -1;
-        shutdown(sock, SHUT_RDWR);
-        close(sock);
+      //threads will start closing after
+      //they finish their iteration
+      shutdown_threads_ = true;
+      
+      //unblock all of our accept calls
+      shutdown(svr_sock_, SHUT_RDWR);
+      close(svr_sock_);
+
+      //svr_sock_ back in init state
+      svr_sock_ = -1;
+
+      //wait for threads to exit and join
+      join_threads();
     }
 }
 
@@ -354,50 +365,47 @@ void Server::message_worker()
   }
 }
 
-bool Server::listen_internal()
+void Server::launch_threads()
 {
-    auto ret = true;
+  accept_worker_pool_ = new std::thread[config_.get_num_accept_workers()];
+  msg_handle_worker_pool_ = new std::thread[config_.get_num_msg_handle_workers()];
 
+  for (int i = 0; i < config_.get_num_accept_workers(); ++i)
+  {
+    accept_worker_pool_[i] = std::thread(std::bind(&Server::accept_worker, this));
+  }
+
+  for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
+  {
+    msg_handle_worker_pool_[i] = std::thread(std::bind(&Server::message_worker, this));
+  }
+}
+
+void Server::join_threads()
+{
+  for (int i = 0; i < config_.get_num_accept_workers(); ++i)
+  {
+      accept_worker_pool_[i].join();
+  }
+  
+  for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
+  {
+      msg_handle_worker_pool_[i].join();
+  }
+
+  delete[] accept_worker_pool_;
+  delete[] msg_handle_worker_pool_;
+}
+
+void Server::listen_internal()
+{
     is_running_ = true;
     shutdown_threads_ = false;
-
-    //create epoll system object
-    epoll_fd_ = epoll_create1(0);
     
     ::listen(svr_sock_,
         10000);
 
-    //kickoff threads
-    for (int i = 0; i < config_.get_num_accept_workers(); ++i)
-    {
-      accept_worker_pool_[i] = std::thread(std::bind(&Server::accept_worker, this));
-    }
-
-    for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
-    {
-      msg_handle_worker_pool_[i] = std::thread(std::bind(&Server::message_worker, this));
-    }
-
-
-
-    //wait for stop to be called
-    for (int i = 0; i < config_.get_num_accept_workers(); ++i)
-    {
-        accept_worker_pool_[i].join();
-    }
-
-    for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
-    {
-        msg_handle_worker_pool_[i].join();
-    }
-
-    //close epoll
-    close(epoll_fd_);
-
-    shutdown_threads_ = false;
-    is_running_ = false;
-
-    return ret;
+    launch_threads();
 }
 
 void accept_handler(char* msg, int fd)
@@ -419,6 +427,14 @@ int main()
   Server server(std::move(config));
 
   server.listen("localhost", 1234);
+
+  usleep(1000000);
+
+  server.listen("localhost", 1234);
+
+  usleep(1000000);
+  
+  server.stop();
   
   return 0;
 }

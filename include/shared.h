@@ -31,7 +31,7 @@ bool checkerrno(int fd,
 }
 
 
-#define checkerrno(x) checkerrno(x, __FILE__, __LINE__)
+#define checkerrno(x) checkerrno((x), __FILE__, __LINE__)
 
 
 long num_cores()

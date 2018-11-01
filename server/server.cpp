@@ -11,24 +11,39 @@
 #include <functional>
 #include <memory.h>
 
-struct ServerConfig {
+typedef void(*lpfn)(char*, int);
 
+class ServerConfig {
+public:
+  ServerConfig();
+  ~ServerConfig();
   void autoconfig();
-  void set_accept_handler(void(*)(char*, int));
-  void set_message_handler(void(*)(char*, int));
+  void set_accept_handler(lpfn);
+  void set_message_handler(lpfn);
+  void set_num_accept_workers(long);
+  void set_num_msg_handle_workers(long);
+  void set_epoll_wait_timeout(long);
+  lpfn get_accept_handler();
+  lpfn get_message_handler();
+  long get_num_accept_workers();
+  long get_num_msg_handle_workers();
+  long get_epoll_wait_timeout();
+  bool good();
+
+private:
+  long num_cores();
 
   long num_accept_workers_;
   long num_msg_handle_workers_;
   long epoll_wait_timeout_;
-  void(*accept_handler_)(char*, int);
-  void(*message_handler_)(char*, int);
-
-private:
-
-  long num_cores();
+  lpfn accept_handler_;
+  lpfn message_handler_;
   
 };
 
+ServerConfig::ServerConfig() {}
+
+ServerConfig::~ServerConfig() {}
 
 void ServerConfig::autoconfig()
 {
@@ -45,6 +60,57 @@ void ServerConfig::set_accept_handler(void(*handler)(char*, int))
 void ServerConfig::set_message_handler(void(*handler)(char*, int))
 {
   message_handler_ = handler;
+}
+
+void ServerConfig::set_num_accept_workers(long n)
+{
+  num_accept_workers_ = n;
+}
+
+void ServerConfig::set_num_msg_handle_workers(long n)
+{
+  num_msg_handle_workers_ = n;
+}
+
+void ServerConfig::set_epoll_wait_timeout(long us)
+{
+  epoll_wait_timeout_ = us;
+}
+
+lpfn ServerConfig::get_accept_handler()
+{
+  return accept_handler_;
+}
+
+lpfn ServerConfig::get_message_handler()
+{
+  return message_handler_;
+}
+
+long ServerConfig::get_num_accept_workers()
+{
+  return num_accept_workers_;
+}
+
+long ServerConfig::get_num_msg_handle_workers()
+{
+  return num_msg_handle_workers_;
+}
+
+long ServerConfig::get_epoll_wait_timeout()
+{
+  return epoll_wait_timeout_;
+}
+
+//assert data is good to use
+//compiles out in release?
+bool ServerConfig::good()
+{
+  assert(num_accept_workers_ > 0);
+  assert(num_msg_handle_workers_ > 0);
+  assert(epoll_wait_timeout_ >= 0);
+  assert(accept_handler_ != nullptr);
+  assert(message_handler_ != nullptr);
 }
 
 long ServerConfig::num_cores()
@@ -91,8 +157,9 @@ Server::Server(ServerConfig&& config)
   , is_running_(false)
   , shutdown_threads_(false)
 {
-  accept_worker_pool_ = new std::thread[config.num_accept_workers_];
-  msg_handle_worker_pool_ = new std::thread[config.num_msg_handle_workers_];
+  config_.good();
+  accept_worker_pool_ = new std::thread[config_.get_num_accept_workers()];
+  msg_handle_worker_pool_ = new std::thread[config_.get_num_msg_handle_workers()];
 }
 
 Server::~Server()
@@ -233,7 +300,7 @@ void Server::accept_worker()
       &event);
 
     //let them have an event on connect
-    config_.accept_handler_(buffer, new_connect_fd);  
+    config_.get_accept_handler()(buffer, new_connect_fd);  
   }
 }
 
@@ -254,7 +321,7 @@ void Server::message_worker()
       int num_events = epoll_wait(epoll_fd_,
         &event,
         1,
-        250);
+        config_.get_epoll_wait_timeout());
 
       if (num_events > 0)
       {
@@ -275,8 +342,7 @@ void Server::message_worker()
         //to get a head start and not wait for all data to arrive
         if (num_read != -1)
         {
-          
-          config_.message_handler_(buffer, event.data.fd);
+          config_.get_message_handler()(buffer, event.data.fd);
         }
       }
     }
@@ -302,12 +368,12 @@ bool Server::listen_internal()
         10000);
 
     //kickoff threads
-    for (int i = 0; i < config_.num_accept_workers_; ++i)
+    for (int i = 0; i < config_.get_num_accept_workers(); ++i)
     {
       accept_worker_pool_[i] = std::thread(std::bind(&Server::accept_worker, this));
     }
 
-    for (int i = 0; i < config_.num_msg_handle_workers_; ++i)
+    for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
     {
       msg_handle_worker_pool_[i] = std::thread(std::bind(&Server::message_worker, this));
     }
@@ -315,12 +381,12 @@ bool Server::listen_internal()
 
 
     //wait for stop to be called
-    for (int i = 0; i < config_.num_accept_workers_; ++i)
+    for (int i = 0; i < config_.get_num_accept_workers(); ++i)
     {
         accept_worker_pool_[i].join();
     }
 
-    for (int i = 0; i < config_.num_msg_handle_workers_; ++i)
+    for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
     {
         msg_handle_worker_pool_[i].join();
     }
@@ -348,6 +414,7 @@ int main()
 {
   ServerConfig config;
   config.autoconfig();
+  config.set_accept_handler(accept_handler);
   config.set_message_handler(message_handler);
   Server server(std::move(config));
 

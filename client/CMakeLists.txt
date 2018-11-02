@@ -24,11 +24,11 @@ include_directories(../include)
 # Libs
 set(LIBRARY_FILES OpenSSL::Crypto OpenSSL::SSL Threads::Threads)
 
+# set compiler flags
+set(COMMON "-g -02 -std=gnu++1z -march=native -Wall -Wextra")
+
 # set the target
 add_executable (${PROJECT_NAME} ${SOURCE_FILES})
-set_target_properties(${PROJECT_NAME}
-  PROPERTIES CXX_STANDARD 17
-  CXX_EXTENSIONS OFF)
 
 # Link the libs
 target_link_libraries(${PROJECT_NAME} ${LIBRARY_FILES})

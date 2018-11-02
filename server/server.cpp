@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <functional>
 #include <memory.h>
+#include <signal.h>
+#include <mutex>
 
 typedef void(*lpfn)(char*, int);
 
@@ -22,13 +24,11 @@ public:
   void set_message_handler(lpfn);
   void set_num_accept_workers(long);
   void set_num_msg_handle_workers(long);
-  void set_epoll_wait_timeout(long);
   void set_backlog(long);
   lpfn get_accept_handler();
   lpfn get_message_handler();
   long get_num_accept_workers();
   long get_num_msg_handle_workers();
-  long get_epoll_wait_timeout();
   long get_backlog();
   bool good();
 
@@ -37,7 +37,6 @@ private:
 
   long num_accept_workers_;
   long num_msg_handle_workers_;
-  long epoll_wait_timeout_;
   long backlog_;
   lpfn accept_handler_;
   lpfn message_handler_;
@@ -52,7 +51,6 @@ void ServerConfig::autoconfig()
 {
   num_accept_workers_ = 1;
   num_msg_handle_workers_ = num_cores() * 2;
-  epoll_wait_timeout_ = 250;
   backlog_ = 10000;
 }
 
@@ -74,11 +72,6 @@ void ServerConfig::set_num_accept_workers(long n)
 void ServerConfig::set_num_msg_handle_workers(long n)
 {
   num_msg_handle_workers_ = n;
-}
-
-void ServerConfig::set_epoll_wait_timeout(long us)
-{
-  epoll_wait_timeout_ = us;
 }
 
 void ServerConfig::set_backlog(long backlog)
@@ -106,11 +99,6 @@ long ServerConfig::get_num_msg_handle_workers()
   return num_msg_handle_workers_;
 }
 
-long ServerConfig::get_epoll_wait_timeout()
-{
-  return epoll_wait_timeout_;
-}
-
 long ServerConfig::get_backlog()
 {
   return backlog_;
@@ -123,7 +111,6 @@ bool ServerConfig::good()
   assert(backlog_ >= 0);
   assert(num_accept_workers_ > 0);
   assert(num_msg_handle_workers_ > 0);
-  assert(epoll_wait_timeout_ >= 0);
   assert(accept_handler_ != nullptr);
   assert(message_handler_ != nullptr);
 }
@@ -146,20 +133,20 @@ public:
   void reconfigure(ServerConfig&&);
 
 private:
-  template<typename Fn>
-  int create_socket(const char* host, int port, Fn fn, int socket_flags = 0);
-  int create_server_socket(const char* host, int port, int socket_flags);
+  void create_socket(const char* host, int port, int socket_flags = 0);
   int bind_internal(const char* host, int port, int socket_flags);
   template<long _fixed_buffer_size = 1024>
   void accept_worker();
   template<long _fixed_buffer_size = 1024>
-  void message_worker();
+  void message_worker(bool&, std::mutex*);
   void launch_threads();
   void join_threads();
   void listen_internal();
 
   std::thread* accept_worker_pool_;
   std::thread* msg_handle_worker_pool_;
+  std::mutex** per_msg_handle_worker_mutex_;
+  bool* msg_handle_worker_running_flags_;
   ServerConfig config_;
   int svr_sock_;
   int epoll_fd_;
@@ -226,8 +213,7 @@ void Server::reconfigure(ServerConfig&& config)
   config = config;
 }
 
-template<typename Fn>
-int Server::create_socket(const char* host, int port, Fn fn, int socket_flags)
+void Server::create_socket(const char* host, int port, int socket_flags)
 {
     // Get address info
     struct addrinfo hints;
@@ -239,10 +225,12 @@ int Server::create_socket(const char* host, int port, Fn fn, int socket_flags)
     hints.ai_flags = socket_flags;
     hints.ai_protocol = 0;
 
+    //replace with c
     auto service = std::to_string(port);
 
     if (getaddrinfo(host, service.c_str(), &hints, &result)) {
-        return -1;
+      svr_sock_ = -1;
+      return;
     }
 
     for (auto rp = result; rp; rp = rp->ai_next) {
@@ -257,35 +245,27 @@ int Server::create_socket(const char* host, int port, Fn fn, int socket_flags)
        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
 
        // bind or connect
-       if (fn(sock, *rp)) {
-          freeaddrinfo(result);
-          return sock;
+       yes = ::bind(sock, (const sockaddr*)rp, rp->ai_addrlen);
+       if (yes != -1)
+       {
+         yes = ::listen(sock, config_.get_backlog());
+         if (yes != -1)
+         {
+           svr_sock_ = sock;
+           return;
+         }
        }
 
        close(sock);
     }
 
     freeaddrinfo(result);
-    return -1;
-}
-
-int Server::create_server_socket(const char* host, int port, int socket_flags)
-{
-    return create_socket(host, port,
-        [](int sock, struct addrinfo& ai) -> bool {
-            if (::bind(sock, ai.ai_addr, ai.ai_addrlen)) {
-                  return false;
-            }
-            if (::listen(sock, 5)) { // Listen through 5 channels
-                return false;
-            }
-            return true;
-        }, socket_flags);
+    svr_sock_ = -1;
 }
 
 int Server::bind_internal(const char* host, int port, int socket_flags)
 {
-    svr_sock_ = create_server_socket(host, port, socket_flags);
+    create_socket(host, port, socket_flags);
     if (svr_sock_ == -1) {
         return -1;
     }
@@ -334,12 +314,14 @@ void Server::accept_worker()
 }
 
 template<const long _fixed_buffer_size>
-void Server::message_worker()
+void Server::message_worker(bool& im_running, std::mutex* my_mutex)
 {
+  my_mutex->lock();
+  im_running = true;
+  my_mutex->unlock();
+
   epoll_event event;
   char buffer[_fixed_buffer_size];
-  int written_index = 0;
-  int read_index = 0;
   long packet_len;
   bool again = false;
 
@@ -355,7 +337,7 @@ void Server::message_worker()
       int num_events = epoll_wait(epoll_fd_,
         &event,
         1,
-        config_.get_epoll_wait_timeout());
+        -1);
 
       if (num_events > 0)
       {
@@ -414,21 +396,32 @@ void Server::message_worker()
       //add to packet
     }
   }
+
+  my_mutex->lock();
+  im_running = false;
+  my_mutex->unlock();
 }
 
 void Server::launch_threads()
 {
   accept_worker_pool_ = new std::thread[config_.get_num_accept_workers()];
   msg_handle_worker_pool_ = new std::thread[config_.get_num_msg_handle_workers()];
+  msg_handle_worker_running_flags_ = new bool[config_.get_num_msg_handle_workers()];
+  per_msg_handle_worker_mutex_ = new std::mutex*[config_.get_num_msg_handle_workers()];
 
   for (int i = 0; i < config_.get_num_accept_workers(); ++i)
   {
-    accept_worker_pool_[i] = std::thread(std::bind(&Server::accept_worker, this));
+    accept_worker_pool_[i] = std::thread(std::bind(&Server::accept_worker<1024>, this));
   }
 
   for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
   {
-    msg_handle_worker_pool_[i] = std::thread(std::bind(&Server::message_worker, this));
+    per_msg_handle_worker_mutex_[i] = new std::mutex();
+    msg_handle_worker_running_flags_[i] = false;
+    msg_handle_worker_pool_[i] = std::thread(std::bind(&Server::message_worker<1024>,
+      this,
+      msg_handle_worker_running_flags_[i],
+      per_msg_handle_worker_mutex_[i]));
   }
 }
 
@@ -439,11 +432,29 @@ void Server::join_threads()
       accept_worker_pool_[i].join();
   }
   
+  bool retry = true;
+  while (retry)
+  {
+    retry = false;
+    for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
+    {
+      per_msg_handle_worker_mutex_[i]->lock();
+      if (msg_handle_worker_running_flags_[i])
+      {
+        pthread_kill(msg_handle_worker_pool_[i].native_handle(), SIGCONT);
+        retry = true;
+      }
+      per_msg_handle_worker_mutex_[i]->unlock();
+    }
+  }
+
   for (int i = 0; i < config_.get_num_msg_handle_workers(); ++i)
   {
       msg_handle_worker_pool_[i].join();
+      delete per_msg_handle_worker_mutex_[i];
   }
 
+  delete[] per_msg_handle_worker_mutex_;
   delete[] accept_worker_pool_;
   delete[] msg_handle_worker_pool_;
 }
@@ -452,9 +463,6 @@ void Server::listen_internal()
 {
     is_running_ = true;
     shutdown_threads_ = false;
-    
-    ::listen(svr_sock_,
-        config_.get_backlog());
 
     launch_threads();
 }
@@ -480,6 +488,8 @@ int main()
   server.listen("localhost", 1234);
 
   usleep(1000000);
+
+  server.stop();
 
   server.listen("localhost", 1234);
 

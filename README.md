@@ -368,4 +368,36 @@ I decided I can't anticipate things well enough to create a whole public interfa
 I'm going to work on ML-bit-packing instead. Research iteration. Report back.
 I need to implement a deep-learning neural network!
 
--3 This is the THIRD iteration journal entry stub.
+-3 This is the THIRD iteration journal entry. I did some research in my head.
+I need to compare simple-lightning-fast linear regressions ML : deep-learning neural net
+where applicable. Results could be surprising. I really don't know what I'm doing here.
+Ideally Lightning Net would have a full range of front and back ends but for now it's
+going to linear regressions based 'ML' (if you can even call it that?) or deep-learning neural network
+of little variance. I'm very much in the research and experiment phase with Lightning Net.
+I have to figure out if something simple can do the job better sometimes. The curve would likely
+look like y = x/2 flipped upside down and moved up a sector sometimes... I could see simple statistical
+analasys linear regression easily predicting the 'intelligent vector' to set some variables with during
+warmup and maintanence optimization. Warmup optimization - initial optimizering. Maintanence optimization -
+happens more and more infrequently as predictions become more assured. Whole days and months and years
+of data can be used to train a machine and Maintance optimization can become a Ghost. You could even
+eject Maintance optimization code from the program's set RAM and lower RAM hogging, JUST WRITE IT TO THE DISK STACK LOL!
+DISK STACK IS A NEAT IDEA TOO. *10 MIN LATER* - NEED TO LEARN ABOUT/COPY&&EXPERIMENT DEEP - LEARN NEURAL NET CODE/LIB... *30 seconds* I NEED TO OPTIMIZE EVERY SINGLE C++ PROGRAM ON EARTH WITH MACHINE LEARNING TECHNIQUES
+
+BROADCAST SUSPENSION SYSTEM?
+https://d2v9y0dukr6mq2.cloudfront.net/video/thumbnail/dHnxL5V/fireworks-pinwheel-catherine-wheel_e1xuowhdz__F0000.png
+https://www.allisonarmour.com/wp-content/uploads/2015/12/fire-pinwheel.jpg
+HOLD OLD DYNAMIC FUNCTIONS WHILE BROADCASTING NEW ONES! WRITE THE LAST ONES TO DISK ON THE THINGS DISKSTACK SO U
+CAN REVERT - IT IS DOUBLE DATA KEEPING BUT THIS ALGORITHMS WITH THE DISK STACK IS TOO EAZY AND OKAY FOR NOA
+DISKSTACKLENMAX??????
+
+DETECT AND SIGNAL BAD NETWORK FROM THE CLIENT TO THE SERVER AND HAVE IT BE ABLE TO 'DELAY ITSELF' IF IT ACTUALLY MAKES
+SENSE, LIKE KEEPING A BROADCAST ORDER WITH PEOPLE WITH GOOD SIGNALS GO FIRST AND POSSIBLY PEOPLE WITH BAD SIGNALS
+WILL GET BETTER SIGNALS BY THE TIME IT IS THEIR TURN. THIS IS ACTUALLY SO GOOD AS A bit FOR EACH CONNECTION! WHAT
+IF I CAN LEARN SOMETING???? VARIANCE! IF EXPIREMENTAL_RESULT > LAST_EXPERIMENTAL_RESULT THEN WINNING()
+
+HAVE TO BE ABLE TO SPECIFY A PACKET THAT'S RELIABLE ON UDP
+
+I WONDER HOW MANY IDEAS ARE THERE THAT COULD MAKE IT ALL BETTER? IDK, JUST FIND WAYS IT VARIES AND MAKE IT DO EXPERIMENTS
+FOR EACH ONE AND THEN SEE WHAT WAS BEST. OR DO A PERMUTATION AND SEE IF IT WAS BETTER AND IF NOT REVERT!
+MAYBE YOU DON'T EVEN NEED ML BUT I THINK A SENSIBLY HAND-CODED CLIENT CODE OF LIGHT NET SHOULD BE MORE QUICKLY AND
+FULLY OPTIMIZED BY DEEP LEARNING FOR SOME REASON. WHAAAT IS IT?

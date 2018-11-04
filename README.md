@@ -348,3 +348,24 @@
 //COMPARE WITH BOOST.ASIO IN NETWORK USAGE, RAM USAGE, CPU, THROUGHPUT, ETC
 //COMES WITH SAMPLE TEST PROGRAMS TO RUN AND ALLOWS YOU TO MAKE A REPORT ABOUT YOUR TEST
 //THAT I CAN POST ON THE WEBSITE
+
+KEEP AN ITERATION JOURNAL
+PLAN ITERATIONS
+TRY TO LEARN WHAT TO ANTICIPATE FROM THIS JOURNALING
+LEARN ABOUT THE AGILE 'DISCIPLINES' AS DESCRIBED BY UNCLE BOB THE PROGRAMMER LOL
+(IMO THEY ARE PASSES YOU CAN MAKE OVER YOUR CODE AND PLANNING PASSES - HOW TO ITERATE)
+
+ITERATION JOURNAL
+-1 THIS IS THE FIRST ITERATION JOURNAL ENTRY. I ALREADY DOVE IN AND WROTE CODE.
+I THINK IT'S GOOD AND MOST OF IT WILL BE PUT TO SOME KIND OF USE IN THE END.
+I WANT TO KEEP DESIGNING AND WORK ON A TOTAL-PUBLIC-INTERFACE that describes
+my whole public interface. Each function should have a unit-test stub. This
+should make coding easier if I anticipate things well - will I?
+Is a unit-test stub generator worth it? Find out on the next episode of DRAGON BALL Z!
+
+-2 This is the SECOND iteration journal entry. Iteration 1 lasted not even a minute.
+I decided I can't anticipate things well enough to create a whole public interface.
+I'm going to work on ML-bit-packing instead. Research iteration. Report back.
+I need to implement a deep-learning neural network!
+
+-3 This is the THIRD iteration journal entry stub.
